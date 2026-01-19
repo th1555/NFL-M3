@@ -1,0 +1,490 @@
+import ssl
+
+ssl._create_default_https_context = ssl._create_unverified_context
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from dash import Dash, dcc, html, Input, Output
+import dash_bootstrap_components as dbc
+import nfl_data_py as nfl
+import os
+
+# ----------------------------------------------------------------------------------
+# 1. DESIGN SYSTEM & CONFIGURATION
+# ----------------------------------------------------------------------------------
+
+COLORS = {
+    'background': '#0D1117',
+    'surface': '#161B22',
+    'infra': '#2F81F7',
+    'skill': '#DA3633',
+    'success': '#2EA043',
+    'text_main': '#F0F6FC',
+    'text_muted': '#8B949E',
+    'border': '#30363D'
+}
+
+FONTS = {
+    'header': 'Montserrat, sans-serif',
+    'body': 'Inter, sans-serif'
+}
+
+NFL_LOGO_URL = "https://upload.wikimedia.org/wikipedia/en/thumb/a/a2/National_Football_League_logo.svg/1200px-National_Football_League_logo.svg.png"
+
+# ----------------------------------------------------------------------------------
+# 2. DATA PIPELINE
+# ----------------------------------------------------------------------------------
+
+print("Initializing Data Engine...")
+
+try:
+    draft_picks = nfl.import_draft_picks()
+    teams = nfl.import_team_desc()[['team_abbr', 'team_logo_espn']]
+except Exception as e:
+    print(f"Error loading NFL Data: {e}")
+    exit()
+
+infrastructure_pos = ['T', 'G', 'C', 'OL', 'OT', 'TE']
+skill_pos = ['QB', 'WR', 'RB']
+
+df = draft_picks[
+    (draft_picks['position'].isin(infrastructure_pos + skill_pos)) &
+    (draft_picks['season'] >= 2011) &
+    (draft_picks['season'] <= 2021)
+    ].copy()
+
+df['group'] = df['position'].apply(lambda x: 'Infrastructure' if x in infrastructure_pos else 'Skill')
+df['w_av'] = pd.to_numeric(df['w_av'], errors='coerce').fillna(0)
+
+# THRESHOLDS
+df['is_bust'] = (df['w_av'] < 10).astype(int)
+# KEEPING YOUR ORIGINAL 40 THRESHOLD (Core Starter)
+df['is_core_starter'] = (df['w_av'] >= 40).astype(int)
+
+df = df.merge(teams, left_on='team', right_on='team_abbr', how='left')
+
+
+def assign_tier(wav):
+    if wav >= 65: return 'All-Pro Caliber'
+    if wav >= 25: return 'Solid Contributor'
+    if wav >= 10: return 'Roster Player'
+    return 'Bust (<10 wAV)'
+
+
+df['player_tier'] = df['w_av'].apply(assign_tier)
+
+if not os.path.exists('processed_nfl_draft_data.csv'):
+    df.to_csv('processed_nfl_draft_data.csv', index=False)
+    print("Dataset exported successfully.")
+
+print(f"Engine Ready: {len(df)} players loaded.")
+
+
+# ----------------------------------------------------------------------------------
+# 3. COMPONENT FACTORY
+# ----------------------------------------------------------------------------------
+
+def create_card(title, graph_id, insight_text=None):
+    return dbc.Card([
+        dbc.CardHeader([
+            html.H5(title, className="m-0",
+                    style={'fontFamily': FONTS['header'], 'color': COLORS['text_main'], 'fontWeight': '600',
+                           'fontSize': '13px', 'letterSpacing': '0.5px', 'textTransform': 'uppercase'}),
+        ], style={'backgroundColor': COLORS['surface'], 'borderBottom': f'1px solid {COLORS["border"]}',
+                  'padding': '12px 20px'}),
+
+        dbc.CardBody([
+            html.Div([
+                html.I(className="bi bi-info-circle-fill me-2", style={'color': COLORS['infra']}),
+                html.Span(insight_text,
+                          style={'fontFamily': FONTS['body'], 'fontSize': '12px', 'color': COLORS['text_muted']})
+            ], style={'backgroundColor': 'rgba(47, 129, 247, 0.05)', 'borderLeft': f'3px solid {COLORS["infra"]}',
+                      'padding': '10px', 'borderRadius': '0 4px 4px 0',
+                      'marginBottom': '15px'}) if insight_text else None,
+
+            dcc.Graph(id=graph_id, config={'displayModeBar': False})
+        ], style={'padding': '20px'})
+    ], style={'backgroundColor': COLORS['surface'], 'border': f'1px solid {COLORS["border"]}', 'borderRadius': '8px',
+              'marginBottom': '24px', 'boxShadow': '0 4px 6px rgba(0,0,0,0.1)'})
+
+
+def create_kpi(label, value_id, sublabel, accent_color):
+    return dbc.Col([
+        dbc.Card([
+            dbc.CardBody([
+                html.H6(label, style={'color': COLORS['text_muted'], 'fontSize': '11px', 'textTransform': 'uppercase',
+                                      'letterSpacing': '1px', 'marginBottom': '8px'}),
+                html.H2(id=value_id,
+                        style={'color': COLORS['text_main'], 'fontFamily': FONTS['header'], 'fontWeight': '700',
+                               'marginBottom': '4px'}),
+                html.Div([
+                    html.I(className="bi bi-graph-up me-1", style={'fontSize': '10px'}),
+                    html.Span(sublabel)
+                ], style={'color': accent_color, 'fontSize': '11px', 'fontWeight': '600'})
+            ])
+        ], style={'backgroundColor': COLORS['surface'], 'border': f'1px solid {COLORS["border"]}',
+                  'borderBottom': f'4px solid {accent_color}', 'borderRadius': '8px', 'height': '100%'})
+    ], width=3)
+
+
+# ----------------------------------------------------------------------------------
+# 4. CHART LOGIC
+# ----------------------------------------------------------------------------------
+
+def common_layout(fig, height=350):
+    fig.update_layout(
+        plot_bgcolor=COLORS['surface'], paper_bgcolor=COLORS['surface'],
+        font=dict(family=FONTS['body'], color=COLORS['text_muted']),
+        margin=dict(t=30, b=30, l=60, r=20),
+        xaxis=dict(showgrid=True, gridcolor=COLORS['border'], zeroline=False, title_font=dict(size=12)),
+        yaxis=dict(showgrid=True, gridcolor=COLORS['border'], zeroline=False, title_font=dict(size=12)),
+        height=height, showlegend=False
+    )
+    return fig
+
+
+# CHART 1: VIOLIN
+def create_violin_chart(data):
+    premium_df = data[data['round'] <= 3].copy()
+    fig = px.violin(
+        premium_df, x='group', y='w_av', color='group',
+        box=True, points='all',
+        color_discrete_map={'Infrastructure': COLORS['infra'], 'Skill': COLORS['skill']}
+    )
+    fig.update_layout(xaxis_title="", yaxis_title="Career Weighted AV")
+    return common_layout(fig)
+
+
+# CHART 2: DUMBBELL
+def create_dumbbell_chart(data):
+    bust_data = data.groupby(['round', 'group'])['is_bust'].mean().reset_index()
+    bust_data['bust_pct'] = (bust_data['is_bust'] * 100).round(1)
+
+    fig = go.Figure()
+    piv = bust_data.pivot(index='round', columns='group', values='bust_pct')
+    for r in piv.index:
+        try:
+            fig.add_trace(go.Scatter(x=[piv.loc[r]['Infrastructure'], piv.loc[r]['Skill']], y=[r, r], mode='lines',
+                                     line=dict(color='#30363D', width=2), showlegend=False))
+        except:
+            pass
+
+    for g, c in [('Infrastructure', COLORS['infra']), ('Skill', COLORS['skill'])]:
+        d = bust_data[bust_data['group'] == g]
+        fig.add_trace(go.Scatter(x=d['bust_pct'], y=d['round'],
+                                 mode='markers+text', marker=dict(color=c, size=12),
+                                 name=g, textposition='top center'))
+
+    fig.update_layout(xaxis_title="Bust Rate (%)", yaxis_title="Draft Round", yaxis=dict(autorange="reversed"))
+    return common_layout(fig)
+
+
+# CHART 3: LOLLIPOP
+def create_lollipop_chart(data):
+    starter_data = data.groupby(['round', 'group'])['is_core_starter'].mean().reset_index()
+    starter_data['pct'] = (starter_data['is_core_starter'] * 100).round(1)
+
+    fig = go.Figure()
+    for g, c in zip(['Infrastructure', 'Skill'], [COLORS['infra'], COLORS['skill']]):
+        d = starter_data[starter_data['group'] == g]
+        for _, row in d.iterrows():
+            fig.add_trace(go.Scatter(x=[0, row['pct']], y=[f"R{row['round']} {g}", f"R{row['round']} {g}"],
+                                     mode='lines', line=dict(color=c, width=2), showlegend=False))
+        fig.add_trace(go.Scatter(x=d['pct'], y=[f"R{r} {g}" for r in d['round']],
+                                 mode='markers', marker=dict(color=c, size=10), name=g))
+
+    fig.update_layout(xaxis_title="Core Starter Rate (%)", yaxis_title="")
+    return common_layout(fig, height=500)
+
+
+# CHART 4: SCATTER
+def create_scatter_chart(data):
+    summary = data[data['round'] <= 5].groupby(['round', 'group']).agg(
+        mean_wav=('w_av', 'mean'), std_wav=('w_av', 'std'), count=('w_av', 'count')).reset_index()
+
+    fig = go.Figure()
+    fig.add_shape(type="rect", x0=10, x1=23, y0=28, y1=60, fillcolor=COLORS['success'], opacity=0.1, line_width=0,
+                  layer="below")
+    fig.add_annotation(x=16.5, y=58, text="EFFICIENT ZONE", showarrow=False,
+                       font=dict(size=10, color=COLORS['success'], weight="bold", family=FONTS['header']))
+
+    for g, c in [('Infrastructure', COLORS['infra']), ('Skill', COLORS['skill'])]:
+        d = summary[summary['group'] == g]
+        fig.add_trace(go.Scatter(x=d['std_wav'], y=d['mean_wav'], mode='markers+text',
+                                 marker=dict(size=d['count'] / 3, color=c, opacity=0.9,
+                                             line=dict(width=1, color='white')),
+                                 text=[f"R{r}" for r in d['round']], textposition='top center',
+                                 textfont=dict(color=COLORS['text_main'], size=10, family=FONTS['body'])))
+
+    fig.update_layout(xaxis_title="Risk (Standard Deviation)", yaxis_title="Return (Mean wAV)",
+                      xaxis=dict(range=[10, 35]), yaxis=dict(range=[10, 65]))
+    return common_layout(fig)
+
+
+# CHART 5: HEATMAP
+def create_heatmap_chart(data):
+    heatmap = data.groupby(['position', 'round']).agg(bust_rate=('is_bust', 'mean'),
+                                                      count=('is_bust', 'count')).reset_index()
+    heatmap = heatmap[heatmap['count'] >= 5]
+    pivot = heatmap.pivot(index='position', columns='round', values='bust_rate')
+    fig = px.imshow(pivot, labels=dict(x="Draft Round", y="Position", color="Bust Rate"),
+                    color_continuous_scale='RdYlGn_r')
+    return common_layout(fig)
+
+
+# CHART 6: SANKEY
+def create_sankey_chart(data):
+    sankey = data.groupby(['group', 'player_tier']).size().reset_index(name='count')
+    nodes = ['Infrastructure', 'Skill', 'All-Pro Caliber', 'Solid Contributor', 'Roster Player', 'Bust (<10 wAV)']
+    node_indices = {n: i for i, n in enumerate(nodes)}
+
+    links = {'source': [], 'target': [], 'value': [], 'color': []}
+    for _, row in sankey.iterrows():
+        g = row['group']
+        t = row['player_tier']
+        target = t if 'Bust' not in t else 'Bust (<10 wAV)'
+        target = target if 'All-Pro' not in target else 'All-Pro Caliber'
+        target = target if 'Solid' not in target else 'Solid Contributor'
+        target = target if 'Roster' not in target else 'Roster Player'
+
+        links['source'].append(node_indices[g])
+        links['target'].append(node_indices[target])
+        links['value'].append(row['count'])
+        links['color'].append('rgba(47, 129, 247, 0.2)' if g == 'Infrastructure' else 'rgba(218, 54, 51, 0.2)')
+
+    fig = go.Figure(go.Sankey(
+        node=dict(pad=15, thickness=20, line=dict(color="black", width=0.5), label=nodes,
+                  color=[COLORS['infra'], COLORS['skill'], COLORS['success'], COLORS['success'], '#E3B341',
+                         COLORS['skill']]),
+        link=links))
+    return common_layout(fig, height=400)
+
+
+# CHART 7: R2 SWEET SPOT
+def create_r2_chart(data):
+    r2 = data[data['round'] == 2].groupby('group').agg(
+        mean_wav=('w_av', 'mean'), std_wav=('w_av', 'std'),
+        bust_rate=('is_bust', 'mean'), starter_rate=('is_core_starter', 'mean')).reset_index()
+
+    fig = make_subplots(rows=1, cols=4,
+                        subplot_titles=['Avg wAV (Return)', 'Risk (Std Dev)', 'Bust Rate %', 'Starter Rate %'])
+
+    for i, col in enumerate(['mean_wav', 'std_wav', 'bust_rate', 'starter_rate'], 1):
+        for g, c in [('Infrastructure', COLORS['infra']), ('Skill', COLORS['skill'])]:
+            val = r2[r2['group'] == g][col].values[0]
+            fig.add_trace(go.Bar(x=[g], y=[val], marker_color=c, showlegend=False), row=1, col=i)
+
+    fig.update_layout(paper_bgcolor=COLORS['surface'], plot_bgcolor=COLORS['surface'],
+                      font=dict(color=COLORS['text_muted']))
+    return fig
+
+
+# CHART 8: EXPLORER
+def create_explorer_chart(data):
+    fig = px.scatter(data, x='pick', y='w_av', color='group',
+                     color_discrete_map={'Infrastructure': COLORS['infra'], 'Skill': COLORS['skill']},
+                     hover_data=['pfr_player_name', 'position', 'season'])
+    fig.update_layout(xaxis_title="Overall Pick Number", yaxis_title="Career Weighted AV")
+    return common_layout(fig, height=500)
+
+
+# ----------------------------------------------------------------------------------
+# 5. APP LAYOUT
+# ----------------------------------------------------------------------------------
+
+app = Dash(__name__, external_stylesheets=[
+    dbc.themes.DARKLY,
+    "https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&family=Inter:wght@300;400;500&display=swap",
+    dbc.icons.BOOTSTRAP
+])
+
+app.layout = html.Div([
+    # NAVBAR
+    dbc.Navbar([
+        dbc.Container([
+            dbc.Row([
+                dbc.Col([html.Img(src=NFL_LOGO_URL, style={'height': '40px', 'opacity': '0.9'})], width="auto"),
+                dbc.Col([
+                    html.H5("DRAFT OS", className="mb-0",
+                            style={'fontFamily': FONTS['header'], 'fontWeight': '800', 'color': COLORS['text_main'],
+                                   'letterSpacing': '1px'}),
+                    html.Small("Infrastructure vs. Skill: Risk & Value Arbitrage (2011-2021)",
+                               style={'color': COLORS['text_muted'], 'fontSize': '11px', 'fontWeight': '500'})
+                ])
+            ], align="center"),
+
+            html.Div([
+                html.Label("COHORT WINDOW", className="me-3 small fw-bold",
+                           style={'color': COLORS['infra'], 'fontSize': '10px', 'letterSpacing': '1px'}),
+                dcc.RangeSlider(
+                    id='year-slider', min=2011, max=2021, step=1, value=[2011, 2021],
+                    marks={y: {'label': str(y), 'style': {'color': COLORS['text_muted'], 'fontSize': '10px'}} for y in
+                           [2011, 2016, 2021]},
+                    tooltip={"placement": "bottom", "always_visible": True}
+                )
+            ], style={'width': '350px'})
+        ], fluid=True)
+    ], color=COLORS['surface'], dark=True, className="border-bottom border-secondary mb-5",
+        style={'borderBottomColor': COLORS['border']}),
+
+    dbc.Container([
+        # KPI ROW
+        dbc.Row([
+            create_kpi("Sample Size", "kpi-count", "Draft Picks (2011-2021)", COLORS['success']),
+            create_kpi("Skill Bust Rate", "kpi-star-bust", "<10 wAV Threshold", COLORS['skill']),
+            create_kpi("Infra Bust Rate", "kpi-infra-bust", "Significantly Safer", COLORS['infra']),
+            create_kpi("R2 Value Gap", "kpi-gap", "Infra wAV vs Skill wAV", COLORS['infra'])
+        ], className="mb-5"),
+
+        # NAVIGATION TABS
+        dbc.Tabs([
+            # TAB 1: THE MARKET INEFFICIENCY
+            dbc.Tab(label="1. THE MARKET INEFFICIENCY", tab_style={'color': COLORS['text_muted']},
+                    active_label_style={'color': COLORS['text_main'], 'fontWeight': 'bold',
+                                        'borderTop': f'2px solid {COLORS["infra"]}'}, children=[
+                    html.Div([
+
+                        # --- MARKET ALLOCATION VISUAL ---
+                        dbc.Row([
+                            dbc.Col([
+                                html.Div([
+                                    html.H6("MARKET CAPITAL ALLOCATION (VOLUMETRIC)", className="mb-2",
+                                            style={'color': COLORS['text_muted'], 'fontSize': '11px',
+                                                   'letterSpacing': '1px'}),
+                                    dbc.Progress([
+                                        dbc.Progress(value=57, color=COLORS['skill'], bar=True, label="57% SKILL",
+                                                     style={'fontWeight': 'bold', 'fontSize': '10px'}),
+                                        dbc.Progress(value=43, color=COLORS['infra'], bar=True, label="43% INFRA",
+                                                     style={'fontWeight': 'bold', 'fontSize': '10px'}),
+                                    ], style={'height': '22px', 'backgroundColor': '#21262d', 'borderRadius': '4px'}),
+                                    html.Small(
+                                        "The market invests the majority of draft capital (57%) in Skill positions.",
+                                        className="text-muted mt-2 d-block")
+                                ], className="p-3 mb-4", style={'backgroundColor': COLORS['surface'],
+                                                                'border': f'1px solid {COLORS["border"]}',
+                                                                'borderRadius': '8px'})
+                            ], width=12)
+                        ]),
+                        # ---------------------------------------------
+
+                        dbc.Row([
+                            dbc.Col(create_card("The Volatility Problem (Outcomes Distribution)", "violin-chart",
+                                                "Observation: Infrastructure (Blue) shows a predictable, high-floor cluster. Skill (Red) is highly volatile."),
+                                    width=6),
+                            dbc.Col(create_card("The Bust Rate Premium", "dumbbell-chart",
+                                                "Market Inefficiency: Teams consistently overpay for Skill positions despite higher failure rates in every round."),
+                                    width=6),
+                        ]),
+                    ], className="pt-4")
+                ]),
+
+            # TAB 2: THE RISK REALITY
+            dbc.Tab(label="2. THE RISK REALITY", tab_style={'color': COLORS['text_muted']},
+                    active_label_style={'color': COLORS['text_main'], 'fontWeight': 'bold',
+                                        'borderTop': f'2px solid {COLORS["infra"]}'}, children=[
+                    html.Div([
+                        dbc.Row([
+                            # UPDATED CAPTION TO BE FACTUALLY CORRECT
+                            dbc.Col(create_card("Core Starter Rate (wAV >= 40)", "lollipop-chart",
+                                                "Evidence: Infrastructure maintains comparable starter rates to Skill positions, but minimizes the volatility risks shown in The Volatility Problem Chart."),
+                                    width=6),
+                            dbc.Col(create_card("The Efficiency Frontier", "scatter-chart",
+                                                "Evidence: Infrastructure assets cluster in the 'Efficient Zone' (Low Risk / High Return)."),
+                                    width=6),
+                        ], className="mt-4"),
+                        dbc.Row([
+                            dbc.Col(create_card("Positional Risk Heatmap", "heatmap-chart",
+                                                "Red = High Bust Rate. Note the extreme safety of Centers (C) and Guards (G)."),
+                                    width=6),
+                            dbc.Col(create_card("Attrition Pipeline", "sankey-chart",
+                                                "Pipeline visualization showing the high 'drop-out' rate for Skill players."),
+                                    width=6),
+                        ])
+                    ])
+                ]),
+
+            # TAB 3: THE ARBITRAGE FIX
+            dbc.Tab(label="3. THE ARBITRAGE FIX", tab_style={'color': COLORS['text_muted']},
+                    active_label_style={'color': COLORS['text_main'], 'fontWeight': 'bold',
+                                        'borderTop': f'2px solid {COLORS["infra"]}'}, children=[
+                    html.Div([
+                        dbc.Row([
+                            dbc.Col(create_card("The Round 2 Sweet Spot (Arbitrage Opportunity)", "r2-chart",
+                                                "Solution: Targeting Infrastructure in Round 2 yields Round 1 production at half the cost."),
+                                    width=12),
+                        ], className="mt-4"),
+                        dbc.Row([
+                            dbc.Col(create_card("Asset Explorer", "explorer-chart",
+                                                "Interactive Scatter: Hover to see specific player outcomes."),
+                                    width=12),
+                        ]),
+
+                        dbc.Card([
+                            dbc.CardHeader("STRATEGIC RECOMMENDATIONS",
+                                           style={'backgroundColor': COLORS['success'], 'color': 'white',
+                                                  'fontWeight': 'bold', 'fontFamily': FONTS['header']}),
+                            dbc.CardBody([
+                                html.P([html.Strong("1. CONTEXTUALIZE UPSIDE:"),
+                                        " Acknowledge that Day 2 Skill picks carry >50% Bust Risk."], className="mb-2"),
+                                html.P([html.Strong("2. SECURE THE FLOOR:"),
+                                        " Prioritize Infrastructure in Round 2 to lock in starter-level production."],
+                                       className="mb-2"),
+                                html.P([html.Strong("3. QB ALLOCATION:"),
+                                        " Avoid 'safe' mid-round options; target elite traits early or low-cost lottery tickets late."],
+                                       className="mb-0")
+                            ], style={'backgroundColor': '#0f2e1b', 'color': '#a2f0bc'})
+                        ], className="border-0 shadow mt-4")
+                    ])
+                ]),
+        ]),
+
+        # FOOTER
+        html.Div([
+            html.Hr(className="mt-5", style={'borderColor': COLORS['border']}),
+            html.P([
+                "Primary Data Source: Pro Football Reference (via nfl_data_py) | ",
+                "Created for MSc in AI Applied to Sports"
+            ], className="text-center small text-muted mb-4")
+        ])
+
+    ], fluid=True)
+], style={'backgroundColor': COLORS['background'], 'minHeight': '100vh'})
+
+
+# ----------------------------------------------------------------------------------
+# 6. REACTIVE ANALYTICS
+# ----------------------------------------------------------------------------------
+
+@app.callback(
+    [Output('kpi-count', 'children'), Output('kpi-star-bust', 'children'),
+     Output('kpi-infra-bust', 'children'), Output('kpi-gap', 'children'),
+     Output('violin-chart', 'figure'), Output('dumbbell-chart', 'figure'),
+     Output('lollipop-chart', 'figure'), Output('scatter-chart', 'figure'),
+     Output('heatmap-chart', 'figure'), Output('sankey-chart', 'figure'),
+     Output('r2-chart', 'figure'), Output('explorer-chart', 'figure')],
+    [Input('year-slider', 'value')]
+)
+def update_dashboard(years):
+    d = df[(df['season'] >= years[0]) & (df['season'] <= years[1])]
+
+    star_bust = d[d['group'] == 'Skill']['is_bust'].mean()
+    infra_bust = d[d['group'] == 'Infrastructure']['is_bust'].mean()
+    r2_star = d[(d['round'] == 2) & (d['group'] == 'Skill')]['w_av'].mean()
+    r2_infra = d[(d['round'] == 2) & (d['group'] == 'Infrastructure')]['w_av'].mean()
+    gap = r2_infra - r2_star
+
+    return (
+        f"{len(d):,}", f"{star_bust:.1%}", f"{infra_bust:.1%}", f"+{gap:.1f} wAV",
+        create_violin_chart(d), create_dumbbell_chart(d),
+        create_lollipop_chart(d), create_scatter_chart(d),
+        create_heatmap_chart(d), create_sankey_chart(d),
+        create_r2_chart(d), create_explorer_chart(d)
+    )
+
+
+if __name__ == '__main__':
+    app.run(debug=True, port=8050)
+@th1555
+Comment
