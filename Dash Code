@@ -1,3 +1,5 @@
+# Author: Tom Horwood
+
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -11,7 +13,6 @@ import dash_bootstrap_components as dbc
 import nfl_data_py as nfl
 import os
 
-# ----------------------------------------------------------------------------------
 # 1. DESIGN SYSTEM & CONFIGURATION
 # ----------------------------------------------------------------------------------
 
@@ -33,7 +34,6 @@ FONTS = {
 
 NFL_LOGO_URL = "https://upload.wikimedia.org/wikipedia/en/thumb/a/a2/National_Football_League_logo.svg/1200px-National_Football_League_logo.svg.png"
 
-# ----------------------------------------------------------------------------------
 # 2. DATA PIPELINE
 # ----------------------------------------------------------------------------------
 
@@ -60,7 +60,6 @@ df['w_av'] = pd.to_numeric(df['w_av'], errors='coerce').fillna(0)
 
 # THRESHOLDS
 df['is_bust'] = (df['w_av'] < 10).astype(int)
-# KEEPING YOUR ORIGINAL 40 THRESHOLD (Core Starter)
 df['is_core_starter'] = (df['w_av'] >= 40).astype(int)
 
 df = df.merge(teams, left_on='team', right_on='team_abbr', how='left')
@@ -82,7 +81,6 @@ if not os.path.exists('processed_nfl_draft_data.csv'):
 print(f"Engine Ready: {len(df)} players loaded.")
 
 
-# ----------------------------------------------------------------------------------
 # 3. COMPONENT FACTORY
 # ----------------------------------------------------------------------------------
 
@@ -129,7 +127,6 @@ def create_kpi(label, value_id, sublabel, accent_color):
     ], width=3)
 
 
-# ----------------------------------------------------------------------------------
 # 4. CHART LOGIC
 # ----------------------------------------------------------------------------------
 
@@ -290,7 +287,6 @@ def create_explorer_chart(data):
     return common_layout(fig, height=500)
 
 
-# ----------------------------------------------------------------------------------
 # 5. APP LAYOUT
 # ----------------------------------------------------------------------------------
 
@@ -367,7 +363,6 @@ app.layout = html.Div([
                                                                 'borderRadius': '8px'})
                             ], width=12)
                         ]),
-                        # ---------------------------------------------
 
                         dbc.Row([
                             dbc.Col(create_card("The Volatility Problem (Outcomes Distribution)", "violin-chart",
@@ -453,7 +448,6 @@ app.layout = html.Div([
 ], style={'backgroundColor': COLORS['background'], 'minHeight': '100vh'})
 
 
-# ----------------------------------------------------------------------------------
 # 6. REACTIVE ANALYTICS
 # ----------------------------------------------------------------------------------
 
@@ -484,19 +478,17 @@ def update_dashboard(years):
     )
 
 
-# ----------------------------------------------------------------------------------
-# 7. STATIC EXPORT UTILITY & APP LAUNCH
+# 7. STATIC CHART EXPORT & APP LAUNCH
 # ----------------------------------------------------------------------------------
 
 def export_static_charts():
-    """Generates high-res PNGs of all charts based on full dataset"""
-    print("📸 INITIALIZING BATCH EXPORT...")
+    print("INITIALIZING BATCH EXPORT...")
 
-    # Create directory if it doesn't exist
+    # Just in case  .... Create directory
     if not os.path.exists("exported_charts"):
         os.makedirs("exported_charts")
 
-    # Define the charts to export (using the global 'df')
+    # Define the charts to export
     export_queue = {
         "1_violin_volatility.png": create_violin_chart(df),
         "2_dumbbell_bust_rate.png": create_dumbbell_chart(df),
@@ -509,18 +501,16 @@ def export_static_charts():
     }
 
     try:
-        import kaleido  # Check if engine is installed
         for filename, fig in export_queue.items():
-            # scale=3 provides 300DPI print quality
             fig.write_image(f"exported_charts/{filename}", scale=3)
-            print(f"   ✅ Saved {filename}")
-        print("📸 EXPORT COMPLETE. Check 'exported_charts' folder.")
+            print(f"   Saved {filename}")
+        print("EXPORT COMPLETE. Check 'exported_charts' folder.")
 
     except ImportError:
-        print("⚠️ EXPORT SKIPPED: 'kaleido' library not found.")
+        print("EXPORT SKIPPED: 'kaleido' library not found.")
         print("   Run 'pip install -U kaleido' to enable image export.")
     except Exception as e:
-        print(f"⚠️ EXPORT ERROR: {e}")
+        print(f"EXPORT ERROR: {e}")
 
 
 if __name__ == '__main__':
