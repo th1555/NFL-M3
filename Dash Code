@@ -484,7 +484,48 @@ def update_dashboard(years):
     )
 
 
+# ----------------------------------------------------------------------------------
+# 7. STATIC EXPORT UTILITY & APP LAUNCH
+# ----------------------------------------------------------------------------------
+
+def export_static_charts():
+    """Generates high-res PNGs of all charts based on full dataset"""
+    print("📸 INITIALIZING BATCH EXPORT...")
+
+    # Create directory if it doesn't exist
+    if not os.path.exists("exported_charts"):
+        os.makedirs("exported_charts")
+
+    # Define the charts to export (using the global 'df')
+    export_queue = {
+        "1_violin_volatility.png": create_violin_chart(df),
+        "2_dumbbell_bust_rate.png": create_dumbbell_chart(df),
+        "3_lollipop_starter_rate.png": create_lollipop_chart(df),
+        "4_scatter_efficiency.png": create_scatter_chart(df),
+        "5_heatmap_risk.png": create_heatmap_chart(df),
+        "6_sankey_pipeline.png": create_sankey_chart(df),
+        "7_r2_arbitrage.png": create_r2_chart(df),
+        "8_explorer_scatter.png": create_explorer_chart(df)
+    }
+
+    try:
+        import kaleido  # Check if engine is installed
+        for filename, fig in export_queue.items():
+            # scale=3 provides 300DPI print quality
+            fig.write_image(f"exported_charts/{filename}", scale=3)
+            print(f"   ✅ Saved {filename}")
+        print("📸 EXPORT COMPLETE. Check 'exported_charts' folder.")
+
+    except ImportError:
+        print("⚠️ EXPORT SKIPPED: 'kaleido' library not found.")
+        print("   Run 'pip install -U kaleido' to enable image export.")
+    except Exception as e:
+        print(f"⚠️ EXPORT ERROR: {e}")
+
+
 if __name__ == '__main__':
+    # 1. Run the export (happens once on startup)
+    export_static_charts()
+
+    # 2. Start the Server
     app.run(debug=True, port=8050)
-@th1555
-Comment
