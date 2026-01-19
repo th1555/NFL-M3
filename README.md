@@ -1,0 +1,54 @@
+PROJECT: DRAFT OS - ARCHITECTURAL & SKILL POSITION ANALYTICS
+AUTHOR: [Your Name]
+DATE: January 2026
+
+------------------------------------------------------------------
+1. SYSTEM REQUIREMENTS
+------------------------------------------------------------------
+- Python 3.8 or higher
+- Active Internet Connection (Required to fetch live data from GitHub)
+
+------------------------------------------------------------------
+2. INSTALLATION
+------------------------------------------------------------------
+Open your terminal/command prompt to this folder and run:
+
+    pip install -r requirements.txt
+
+*Note: This will install Dash, Plotly, Pandas, and the NFL Data API.*
+
+------------------------------------------------------------------
+3. HOW TO RUN THE DASHBOARD
+------------------------------------------------------------------
+1. Run the script:
+   python [YOUR_SCRIPT_NAME].py
+
+2. Once the server starts, you will see a message like:
+   "Dash is running on http://127.0.0.1:8050/"
+
+3. Open your web browser and go to that link.
+
+------------------------------------------------------------------
+4. TROUBLESHOOTING
+------------------------------------------------------------------
+- If the app crashes on startup with an SSL error, ensure you have
+  standard SSL certificates installed.
+- If the data fails to load, a cached CSV file ('processed_nfl_draft_data.csv')
+  is included in this folder as a fallback.
+
+# Libraries
+
+pandas
+plotly
+dash
+dash-bootstrap-components
+nfl_data_py
+
+# v2 - Try the below if there are any issues with the initial library install
+
+python -m pip install --upgrade pip
+pip install pandas plotly
+pip install dash dash-bootstrap-components
+pip install nfl_data_py
+
+
